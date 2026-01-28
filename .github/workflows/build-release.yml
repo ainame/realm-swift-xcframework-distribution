@@ -192,28 +192,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="${{ inputs.tag }}"
+          REPO="${{ github.repository }}"
 
           # Check if release already exists
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists, deleting old assets..."
-            gh release delete-asset "$RELEASE_TAG" "Realm.xcframework.zip" --yes 2>/dev/null || true
-            gh release delete-asset "$RELEASE_TAG" "RealmSwift.xcframework.zip" --yes 2>/dev/null || true
+            gh release delete-asset "$RELEASE_TAG" "Realm.xcframework.zip" --repo "$REPO" --yes 2>/dev/null || true
+            gh release delete-asset "$RELEASE_TAG" "RealmSwift.xcframework.zip" --repo "$REPO" --yes 2>/dev/null || true
 
             echo "Uploading new assets..."
             gh release upload "$RELEASE_TAG" \
               realm-swift/build/Release/Realm.xcframework.zip \
               realm-swift/build/Release/RealmSwift.xcframework.zip \
+              --repo "$REPO" \
               --clobber
           else
             echo "Creating new release $RELEASE_TAG..."
             gh release create "$RELEASE_TAG" \
+              --repo "$REPO" \
               --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} - iOS (Xcode ${{ inputs.xcode-version }})" \
               --notes-file release_notes.md \
               realm-swift/build/Release/Realm.xcframework.zip \
               realm-swift/build/Release/RealmSwift.xcframework.zip
           fi
 
-          echo "✅ Release created: https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+          echo "✅ Release created: https://github.com/$REPO/releases/tag/$RELEASE_TAG"
 
       - name: Upload build artifacts (for debugging)
         if: failure()
