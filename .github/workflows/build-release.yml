@@ -6,6 +6,7 @@ on:
       tag:
         description: "Realm Swift git tag to build (e.g., v20.0.3)"
         required: true
+        default: "v20.0.3"
         type: string
       xcode-version:
         description: "Xcode version to use (e.g., 26.2)"
