@@ -60,6 +60,8 @@ jobs:
       - name: Build iOS XCFramework
         working-directory: realm-swift
         run: |
+          # Unset GITHUB_WORKSPACE so build.sh uses $(pwd) instead
+          unset GITHUB_WORKSPACE
           # Build for iOS only (includes both device and simulator)
           sh build.sh ios-swift
         env:
