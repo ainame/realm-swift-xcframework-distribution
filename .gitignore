@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build artifacts (if testing locally)
+realm-swift/
+build/
+*.xcframework
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.xcworkspace
+*.xcodeproj
+
+# Logs
+*.log

@@ -1,0 +1,247 @@
+name: Build and Release XCFramework
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Realm Swift git tag to build (e.g., v20.0.3)'
+        required: true
+        type: string
+      xcode-version:
+        description: 'Xcode version to use (e.g., 16.2)'
+        required: true
+        default: '16.2'
+        type: string
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    name: Build Realm Swift ${{ inputs.tag }} with Xcode ${{ inputs.xcode-version }}
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          path: distribution
+
+      - name: Select Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Verify Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-path
+
+      - name: Clone Realm Swift at tag ${{ inputs.tag }}
+        run: |
+          git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/realm/realm-swift.git realm-swift
+          cd realm-swift
+          echo "Cloned Realm Swift at tag $(git describe --tags)"
+          git log -1 --oneline
+
+      - name: Apply patches
+        working-directory: realm-swift
+        run: |
+          echo "Applying patches..."
+          for patch in ../distribution/patches/*.patch; do
+            if [ -f "$patch" ]; then
+              echo "Applying $patch"
+              git apply --verbose "$patch"
+            fi
+          done
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: realm-swift
+
+      - name: Download Realm Core
+        working-directory: realm-swift
+        run: sh build.sh download-core
+
+      - name: Build iOS XCFramework
+        working-directory: realm-swift
+        run: |
+          # Build for iOS only (includes both device and simulator)
+          sh build.sh ios-swift
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_${{ inputs.xcode-version }}.app/Contents/Developer
+
+      - name: Create XCFrameworks
+        working-directory: realm-swift
+        run: |
+          # Create xcframeworks for iOS
+          mkdir -p build/Release
+
+          # Find all built Realm.framework and create xcframework
+          find build/DerivedData/Realm/Build/Products -name 'Realm.framework' \
+            | sed 's/.*/-framework &/' \
+            | xargs xcodebuild -create-xcframework -allow-internal-distribution \
+              -output "build/Release/Realm.xcframework"
+
+          # Find all built RealmSwift.framework and create xcframework
+          find build/DerivedData/Realm/Build/Products -name 'RealmSwift.framework' \
+            | sed 's/.*/-framework &/' \
+            | xargs xcodebuild -create-xcframework -allow-internal-distribution \
+              -output "build/Release/RealmSwift.xcframework"
+
+          # Fix Swift interface naming collisions (from build.sh)
+          find "build/Release/RealmSwift.xcframework" -name "*.swiftinterface" \
+            -exec sed -i '' 's/Realm\.//g' {} \; \
+            -exec sed -i '' 's/import Private/import Realm.Private\nimport Realm.Swift/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.Configuration/RealmSwift.Realm.Configuration/g' {} \; \
+            -exec sed -i '' 's/extension Configuration/extension Realm.Configuration/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.Error[[:>:]]/RealmSwift.Realm.Error/g' {} \; \
+            -exec sed -i '' 's/extension Error/extension Realm.Error/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.AsyncOpenTask/RealmSwift.Realm.AsyncOpenTask/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.UpdatePolicy/RealmSwift.Realm.UpdatePolicy/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.Notification[[:>:]]/RealmSwift.Realm.Notification/g' {} \; \
+            -exec sed -i '' 's/RealmSwift.OpenBehavior/RealmSwift.Realm.OpenBehavior/g' {} \; \
+            -exec sed -i '' 's/τ_1_0/V/g' {} \;
+
+      - name: Package XCFrameworks
+        working-directory: realm-swift
+        run: |
+          cd build/Release
+
+          # Create zip files
+          zip -r Realm.xcframework.zip Realm.xcframework
+          zip -r RealmSwift.xcframework.zip RealmSwift.xcframework
+
+          # Show what was created
+          ls -lh *.zip
+
+          # Show xcframework info
+          xcodebuild -create-xcframework -help | head -1 || true
+          find Realm.xcframework -name "Info.plist" -exec plutil -p {} \; | head -20
+
+      - name: Get version from dependencies
+        id: get-version
+        working-directory: realm-swift
+        run: |
+          VERSION=$(sed -n 's/^VERSION=\(.*\)$/\1/p' dependencies.list)
+          CORE_VERSION=$(sed -n 's/^REALM_CORE_VERSION=\(.*\)$/\1/p' dependencies.list)
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "CORE_VERSION=$CORE_VERSION" >> $GITHUB_OUTPUT
+          echo "Realm Swift Version: $VERSION"
+          echo "Realm Core Version: $CORE_VERSION"
+
+      - name: Create Release Notes
+        id: release-notes
+        run: |
+          cat > release_notes.md <<EOF
+          # Realm Swift ${{ steps.get-version.outputs.VERSION }} - iOS (Xcode ${{ inputs.xcode-version }})
+
+          Community-built XCFramework for iOS, built with Xcode ${{ inputs.xcode-version }}.
+
+          ## 📦 What's Included
+
+          - \`Realm.xcframework.zip\` - Realm Core framework (iOS)
+          - \`RealmSwift.xcframework.zip\` - RealmSwift framework (iOS)
+
+          ## 🛠️ Build Information
+
+          - **Upstream Tag**: \`${{ inputs.tag }}\`
+          - **Realm Swift Version**: ${{ steps.get-version.outputs.VERSION }}
+          - **Realm Core Version**: ${{ steps.get-version.outputs.CORE_VERSION }}
+          - **Xcode Version**: ${{ inputs.xcode-version }}
+          - **Built On**: macOS 15 (GitHub Actions)
+          - **Platforms**: iOS only (arm64 device + arm64/x86_64 simulator)
+
+          ## 📱 Installation
+
+          ### Manual
+
+          1. Download the zip files
+          2. Extract the \`.xcframework\` files
+          3. Drag them into your Xcode project
+          4. Add to "Frameworks, Libraries, and Embedded Content"
+
+          ### Swift Package Manager
+
+          \`\`\`swift
+          dependencies: [
+              .binaryTarget(
+                  name: "Realm",
+                  url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/Realm.xcframework.zip",
+                  checksum: "..."
+              )
+          ]
+          \`\`\`
+
+          ## 📝 Notes
+
+          - This is a **community build** for projects needing XCFrameworks with newer Xcode versions
+          - Built from official Realm Swift source: https://github.com/realm/realm-swift/tree/${{ inputs.tag }}
+          - **Not signed**: Code signing removed (certificate not required)
+          - For original release notes: https://github.com/realm/realm-swift/releases/tag/${{ inputs.tag }}
+
+          ## ⚠️ Important
+
+          - iOS only (watchOS, tvOS, macOS, visionOS not included)
+          - Unsigned binaries
+          - If you need signed or multi-platform builds, build from source
+
+          ---
+
+          Built by [realm-swift-xcframework-distribution](https://github.com/ainame/realm-swift-xcframework-distribution)
+          EOF
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${{ inputs.tag }}"
+
+          # Check if release already exists
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists, deleting old assets..."
+            gh release delete-asset "$RELEASE_TAG" "Realm.xcframework.zip" --yes 2>/dev/null || true
+            gh release delete-asset "$RELEASE_TAG" "RealmSwift.xcframework.zip" --yes 2>/dev/null || true
+
+            echo "Uploading new assets..."
+            gh release upload "$RELEASE_TAG" \
+              realm-swift/build/Release/Realm.xcframework.zip \
+              realm-swift/build/Release/RealmSwift.xcframework.zip \
+              --clobber
+          else
+            echo "Creating new release $RELEASE_TAG..."
+            gh release create "$RELEASE_TAG" \
+              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} - iOS (Xcode ${{ inputs.xcode-version }})" \
+              --notes-file release_notes.md \
+              realm-swift/build/Release/Realm.xcframework.zip \
+              realm-swift/build/Release/RealmSwift.xcframework.zip
+          fi
+
+          echo "✅ Release created: https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+
+      - name: Upload build artifacts (for debugging)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ inputs.tag }}
+          path: |
+            realm-swift/build/**/*.log
+            realm-swift/build/DerivedData/Realm/Logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag**: \`${{ inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ steps.get-version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Xcode**: ${{ inputs.xcode-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Realm.xcframework.zip" >> $GITHUB_STEP_SUMMARY
+          echo "- RealmSwift.xcframework.zip" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Release" >> $GITHUB_STEP_SUMMARY
+          echo "[View Release](https://github.com/${{ github.repository }}/releases/tag/${{ inputs.tag }})" >> $GITHUB_STEP_SUMMARY
