@@ -1,114 +1,63 @@
 # Patches
 
-このディレクトリには、Realm Swift をビルドする際に適用するパッチファイルが含まれています。
+This directory contains patch files applied to Realm Swift during the build process.
 
-## パッチ適用の方針
-
-- **最小限**: 必要最小限のパッチのみ適用
-- **透明性**: すべてのパッチは Git パッチ形式で管理
-- **ドキュメント化**: 各パッチの目的を明記
-
-## パッチ一覧
+## Current Patches
 
 ### `disable-codesigning.patch`
 
-**目的**: コード署名を無効化
+**Purpose**: Remove code signing requirement
 
-**変更内容**:
-- `scripts/create-release-package.rb` から `codesign` コマンド呼び出しを削除
-- `SIGNING_IDENTITY` 環境変数の使用を削除
+**What it does**:
+- Removes `codesign` command from `scripts/create-release-package.rb`
+- Removes `SIGNING_IDENTITY` environment variable usage
 
-**理由**:
-1. **証明書管理の簡素化**
-   - Developer ID 証明書不要
-   - GitHub Secrets の設定不要
-   - 誰でもビルド可能
+**Why**:
+- No certificate management needed
+- Anyone can build without Apple Developer account
+- Major projects (Stripe, Realm official) ship unsigned binaries
 
-2. **業界の実態**
-   - Stripe、Realm 公式も署名なしで配布（2025年10月以降）
-   - 29%の主要 OSS プロジェクトが署名なし
+**Note**: This patch modifies a Ruby script, but our build workflow doesn't run Ruby. The script is only used by Realm's release process which we don't use. We patch it to prevent errors if the script is accidentally invoked.
 
-3. **プライバシー要件は満たす**
-   - プライバシーマニフェストは含まれる
-   - Apple の主要な要件はクリア
+## How Patches Are Applied
 
-**適用対象**:
-- Realm Swift v20.0.3 以前のバージョン（署名あり）
-- 署名が削除されたバージョンには不要
+The GitHub Actions workflow automatically applies patches:
 
-**元のコード** (v20.0.3):
-```ruby
-def create_xcframework(root, xcode_version, configuration, name)
-  signing_identity = ENV['SIGNING_IDENTITY']
-  # ... xcframework 作成 ...
-  sh 'codesign', '--timestamp', '-s', signing_identity, output
-end
+```bash
+git apply --verbose patches/*.patch
 ```
 
-**パッチ後**:
-```ruby
-def create_xcframework(root, xcode_version, configuration, name)
-  # ... xcframework 作成 ...
-  # コード署名はスキップ
-end
-```
+No Ruby installation required - `git apply` is a Git built-in command.
 
-**参考資料**:
-- [コード署名調査レポート](https://github.com/ainame/realm-swift/blob/master/CODESIGNING_REPORT.md)
+## Creating New Patches
 
-## パッチの更新方法
+If you need to modify Realm Swift source:
 
-### 新しいパッチを作成する場合
-
-1. Realm Swift のソースコードを編集
-2. Git diff を取得:
+1. Clone and edit:
    ```bash
+   git clone --branch v20.0.3 https://github.com/realm/realm-swift.git
    cd realm-swift
-   git diff > ../patches/new-patch.patch
+   # Make your changes
    ```
-3. パッチファイルを確認・編集
-4. このREADME.mdに説明を追加
 
-### パッチが適用できない場合
+2. Generate patch:
+   ```bash
+   git diff > ../patches/my-new-patch.patch
+   ```
 
-Realm Swift の新しいバージョンで構造が変わった場合:
+3. Document it in this README
 
-1. 最新のソースコードを確認
-2. パッチファイルを手動で更新
-3. テストビルドで検証
-4. コミット
+## Testing Patches
 
-## トラブルシューティング
-
-### パッチ適用エラー
+Test patch locally before committing:
 
 ```bash
-error: patch failed: scripts/create-release-package.rb:31
-error: scripts/create-release-package.rb: patch does not apply
-```
-
-**対処法**:
-1. Realm Swift のバージョンを確認
-2. 該当ファイルの内容を確認
-3. パッチを手動で更新
-
-### パッチ適用のテスト
-
-ローカルでテスト:
-
-```bash
-# Realm Swift をクローン
-git clone --branch v20.0.3 https://github.com/realm/realm-swift.git
 cd realm-swift
-
-# パッチを適用
 git apply --check ../patches/disable-codesigning.patch
-git apply ../patches/disable-codesigning.patch
-
-# 確認
-git diff
 ```
+
+If it fails, the patch may need updating for newer Realm versions.
 
 ---
 
-**最終更新**: 2026-01-28
+**Last updated**: 2026-01-28
