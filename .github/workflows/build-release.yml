@@ -104,16 +104,12 @@ jobs:
         run: |
           cd build/Release
 
-          # Create zip files
-          zip -r Realm.xcframework.zip Realm.xcframework
-          zip -r RealmSwift.xcframework.zip RealmSwift.xcframework
+          # Create zip files with SPM naming convention
+          zip -r Realm.spm.zip Realm.xcframework
+          zip -r RealmSwift.spm.zip RealmSwift.xcframework
 
           # Show what was created
           ls -lh *.zip
-
-          # Show xcframework info
-          xcodebuild -create-xcframework -help | head -1 || true
-          find Realm.xcframework -name "Info.plist" -exec plutil -p {} \; | head -20
 
       - name: Get version from dependencies
         id: get-version
@@ -126,65 +122,49 @@ jobs:
           echo "Realm Swift Version: $VERSION"
           echo "Realm Core Version: $CORE_VERSION"
 
+      - name: Calculate checksums
+        id: checksums
+        working-directory: realm-swift/build/Release
+        run: |
+          # Calculate SHA256 checksums for SPM
+          REALM_CHECKSUM=$(swift package compute-checksum Realm.spm.zip)
+          REALMSWIFT_CHECKSUM=$(swift package compute-checksum RealmSwift.spm.zip)
+
+          echo "REALM_CHECKSUM=$REALM_CHECKSUM" >> $GITHUB_OUTPUT
+          echo "REALMSWIFT_CHECKSUM=$REALMSWIFT_CHECKSUM" >> $GITHUB_OUTPUT
+
+          echo "Realm checksum: $REALM_CHECKSUM"
+          echo "RealmSwift checksum: $REALMSWIFT_CHECKSUM"
+
       - name: Create Release Notes
         id: release-notes
         run: |
           cat > release_notes.md <<EOF
-          # Realm Swift ${{ steps.get-version.outputs.VERSION }} - iOS (Xcode ${{ inputs.xcode-version }})
+          Community-built XCFramework for Realm Swift ${{ steps.get-version.outputs.VERSION }}.
 
-          Community-built XCFramework for iOS, built with Xcode ${{ inputs.xcode-version }}.
+          Built with Xcode ${{ inputs.xcode-version }} for iOS (device + simulator).
 
-          ## 📦 What's Included
+          ## Swift Package Manager
 
-          - \`Realm.xcframework.zip\` - Realm Core framework (iOS)
-          - \`RealmSwift.xcframework.zip\` - RealmSwift framework (iOS)
-
-          ## 🛠️ Build Information
-
-          - **Upstream Tag**: \`${{ inputs.tag }}\`
-          - **Realm Swift Version**: ${{ steps.get-version.outputs.VERSION }}
-          - **Realm Core Version**: ${{ steps.get-version.outputs.CORE_VERSION }}
-          - **Xcode Version**: $ inputs.xcode-version }}
-          - **Built On**: macOS 26 (GitHub Actions)
-          - **Platforms**: iOS only (arm64 device + arm64/x86_64 simulator)
-
-          ## 📱 Installation
-
-          ### Manual
-
-          1. Download the zip files
-          2. Extract the \`.xcframework\` files
-          3. Drag them into your Xcode project
-          4. Add to "Frameworks, Libraries, and Embedded Content"
-
-          ### Swift Package Manager
+          Add to your \`Package.swift\`:
 
           \`\`\`swift
-          dependencies: [
-              .binaryTarget(
-                  name: "Realm",
-                  url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/Realm.xcframework.zip",
-                  checksum: "..."
-              )
-          ]
+          .binaryTarget(
+              name: "Realm",
+              url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/Realm.spm.zip",
+              checksum: "${{ steps.checksums.outputs.REALM_CHECKSUM }}"
+          ),
+          .binaryTarget(
+              name: "RealmSwift",
+              url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/RealmSwift.spm.zip",
+              checksum: "${{ steps.checksums.outputs.REALMSWIFT_CHECKSUM }}"
+          )
           \`\`\`
-
-          ## 📝 Notes
-
-          - This is a **community build** for projects needing XCFrameworks with newer Xcode versions
-          - Built from official Realm Swift source: https://github.com/realm/realm-swift/tree/${{ inputs.tag }}
-          - **Not signed**: Code signing removed (certificate not required)
-          - For original release notes: https://github.com/realm/realm-swift/releases/tag/${{ inputs.tag }}
-
-          ## ⚠️ Important
-
-          - iOS only (watchOS, tvOS, macOS, visionOS not included)
-          - Unsigned binaries
-          - If you need signed or multi-platform builds, build from source
 
           ---
 
-          Built by [realm-swift-xcframework-distribution](https://github.com/ainame/realm-swift-xcframework-distribution)
+          **Built from**: https://github.com/realm/realm-swift/tree/${{ inputs.tag }}
+          **Unsigned** | **iOS only**
           EOF
 
       - name: Create GitHub Release
@@ -196,24 +176,26 @@ jobs:
 
           # Check if release already exists
           if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists, deleting old assets..."
-            gh release delete-asset "$RELEASE_TAG" "Realm.xcframework.zip" --repo "$REPO" --yes 2>/dev/null || true
-            gh release delete-asset "$RELEASE_TAG" "RealmSwift.xcframework.zip" --repo "$REPO" --yes 2>/dev/null || true
+            echo "Release $RELEASE_TAG already exists, updating with new Xcode ${{ inputs.xcode-version }} build..."
 
-            echo "Uploading new assets..."
-            gh release upload "$RELEASE_TAG" \
-              realm-swift/build/Release/Realm.xcframework.zip \
-              realm-swift/build/Release/RealmSwift.xcframework.zip \
+            # Delete old assets and release notes, then recreate
+            gh release delete "$RELEASE_TAG" --repo "$REPO" --yes
+
+            echo "Creating updated release..."
+            gh release create "$RELEASE_TAG" \
               --repo "$REPO" \
-              --clobber
+              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} (Xcode ${{ inputs.xcode-version }})" \
+              --notes-file release_notes.md \
+              realm-swift/build/Release/Realm.spm.zip \
+              realm-swift/build/Release/RealmSwift.spm.zip
           else
             echo "Creating new release $RELEASE_TAG..."
             gh release create "$RELEASE_TAG" \
               --repo "$REPO" \
-              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} - iOS (Xcode ${{ inputs.xcode-version }})" \
+              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} (Xcode ${{ inputs.xcode-version }})" \
               --notes-file release_notes.md \
-              realm-swift/build/Release/Realm.xcframework.zip \
-              realm-swift/build/Release/RealmSwift.xcframework.zip
+              realm-swift/build/Release/Realm.spm.zip \
+              realm-swift/build/Release/RealmSwift.spm.zip
           fi
 
           echo "✅ Release created: https://github.com/$REPO/releases/tag/$RELEASE_TAG"
