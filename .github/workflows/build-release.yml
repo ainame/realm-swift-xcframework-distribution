@@ -53,13 +53,6 @@ jobs:
             fi
           done
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: true
-          working-directory: realm-swift
-
       - name: Download Realm Core
         working-directory: realm-swift
         run: sh build.sh download-core
