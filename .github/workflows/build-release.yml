@@ -105,8 +105,10 @@ jobs:
           cd build/Release
 
           # Create zip files with SPM naming convention
+          # Realm (Obj-C) - no version needed
           zip -r Realm.spm.zip Realm.xcframework
-          zip -r RealmSwift.spm.zip RealmSwift.xcframework
+          # RealmSwift - include Xcode version
+          zip -r "RealmSwift@${{ inputs.xcode-version }}.spm.zip" RealmSwift.xcframework
 
           # Show what was created
           ls -lh *.zip
@@ -128,13 +130,13 @@ jobs:
         run: |
           # Calculate SHA256 checksums for SPM
           REALM_CHECKSUM=$(swift package compute-checksum Realm.spm.zip)
-          REALMSWIFT_CHECKSUM=$(swift package compute-checksum RealmSwift.spm.zip)
+          REALMSWIFT_CHECKSUM=$(swift package compute-checksum "RealmSwift@${{ inputs.xcode-version }}.spm.zip")
 
           echo "REALM_CHECKSUM=$REALM_CHECKSUM" >> $GITHUB_OUTPUT
           echo "REALMSWIFT_CHECKSUM=$REALMSWIFT_CHECKSUM" >> $GITHUB_OUTPUT
 
           echo "Realm checksum: $REALM_CHECKSUM"
-          echo "RealmSwift checksum: $REALMSWIFT_CHECKSUM"
+          echo "RealmSwift@${{ inputs.xcode-version }} checksum: $REALMSWIFT_CHECKSUM"
 
       - name: Create Release Notes
         id: release-notes
@@ -156,7 +158,7 @@ jobs:
           ),
           .binaryTarget(
               name: "RealmSwift",
-              url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/RealmSwift.spm.zip",
+              url: "https://github.com/ainame/realm-swift-xcframework-distribution/releases/download/${{ inputs.tag }}/RealmSwift@${{ inputs.xcode-version }}.spm.zip",
               checksum: "${{ steps.checksums.outputs.REALMSWIFT_CHECKSUM }}"
           )
           \`\`\`
@@ -176,26 +178,27 @@ jobs:
 
           # Check if release already exists
           if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists, updating with new Xcode ${{ inputs.xcode-version }} build..."
+            echo "Release $RELEASE_TAG already exists, adding Xcode ${{ inputs.xcode-version }} build..."
 
-            # Delete old assets and release notes, then recreate
-            gh release delete "$RELEASE_TAG" --repo "$REPO" --yes
-
-            echo "Creating updated release..."
-            gh release create "$RELEASE_TAG" \
-              --repo "$REPO" \
-              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} (Xcode ${{ inputs.xcode-version }})" \
-              --notes-file release_notes.md \
+            # Upload new RealmSwift build (Realm.spm.zip can be overwritten)
+            gh release upload "$RELEASE_TAG" \
               realm-swift/build/Release/Realm.spm.zip \
-              realm-swift/build/Release/RealmSwift.spm.zip
+              "realm-swift/build/Release/RealmSwift@${{ inputs.xcode-version }}.spm.zip" \
+              --repo "$REPO" \
+              --clobber
+
+            # Update release notes
+            gh release edit "$RELEASE_TAG" \
+              --repo "$REPO" \
+              --notes-file release_notes.md
           else
             echo "Creating new release $RELEASE_TAG..."
             gh release create "$RELEASE_TAG" \
               --repo "$REPO" \
-              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }} (Xcode ${{ inputs.xcode-version }})" \
+              --title "Realm Swift ${{ steps.get-version.outputs.VERSION }}" \
               --notes-file release_notes.md \
               realm-swift/build/Release/Realm.spm.zip \
-              realm-swift/build/Release/RealmSwift.spm.zip
+              "realm-swift/build/Release/RealmSwift@${{ inputs.xcode-version }}.spm.zip"
           fi
 
           echo "✅ Release created: https://github.com/$REPO/releases/tag/$RELEASE_TAG"
